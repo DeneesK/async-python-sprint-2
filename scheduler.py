@@ -124,14 +124,3 @@ class Scheduler:
     def stop(self):
         logger.info('Scheduler was stopped by user')
         self._cancel_threads()
-        answer = input('Continue y/n: ')
-
-        match answer.lower():
-            case 'y':
-                self.restart()
-            case 'n':
-                logger.info('Scheduler was closed by user')
-                exit(0)
-            case _:
-                print('Input "y" or "n"')
-                self.stop()
