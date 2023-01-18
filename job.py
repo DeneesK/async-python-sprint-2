@@ -1,5 +1,7 @@
 import logging
+from threading import Condition
 from datetime import datetime, timedelta
+from typing import Callable
 
 from config import LOGGER_SETTINGS, DT_TEMPLATE
 
@@ -10,12 +12,13 @@ logger = logging.getLogger(__name__)
 
 class Job:
     def __init__(self, *,
-                 task: callable,
+                 task: Callable,
+                 condition_obj: Condition = Condition(),
                  args: tuple = (),
                  start_at: str = '',
                  max_working_time: int = 0,
-                 tries: int = 999,
-                 dependencies: list = []
+                 tries: int = 2,
+                 dependencies: list[Callable] = []
                  ) -> None:
 
         self.start_at = datetime.strptime(start_at, DT_TEMPLATE) if start_at else ''
@@ -29,24 +32,23 @@ class Job:
             self.end_at = None
 
         self.tries = tries
-        self.dependencies = dependencies
+        self.condition = condition_obj
+        self.dependencies = [Job(task=t, args=(condition_obj, *args)) for t in dependencies]
         self.task = task
         self.args = args
         self.name = task.__name__
         self._gen = None
 
     def start(self) -> None:
-        gen = self.task(*self.args)
-        self._gen = gen
+        self._gen = self.task(*self.args)
 
     def restart(self):
         if self.tries:
-            gen = self.task(*self.args)
-            self._gen = gen
+            self._gen = self.task(*self.args)
             self.tries -= 1
 
     def stop(self) -> None:
-        self._gen.send(False)
+        self._gen.close()
 
     def continue_(self) -> None:
         self._gen.send(True)
