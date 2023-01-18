@@ -33,7 +33,7 @@ def create_dirs(cv: Condition, dir_count: int):
         _ = (yield)
         os.makedirs(f'dir{i}')
     with cv:
-        cv.notify_all()
+        cv.notify()
 
 
 @coro_initializer

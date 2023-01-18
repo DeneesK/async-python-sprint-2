@@ -3,14 +3,14 @@ import json
 import logging
 from typing import Any
 
-from config import LOGGER_SETTINGS
+from config import LOGGER_SETTINGS, JSON_FILEPATH
 
 logging.basicConfig(**LOGGER_SETTINGS)
 logger = logging.getLogger(__name__)
 
 
 class JsonFileStorage:
-    def __init__(self, file_path: str = 'state.json'):
+    def __init__(self, file_path: str = JSON_FILEPATH):
         self.file_path = file_path
 
     def save_state(self, state: dict) -> None:

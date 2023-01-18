@@ -6,7 +6,7 @@ from datetime import datetime
 from collections import deque
 
 from job import Job
-from config import LOGGER_SETTINGS
+from config import LOGGER_SETTINGS, JSON_FILEPATH
 from state_handler import State
 
 
@@ -19,40 +19,44 @@ class Scheduler:
         self.pool_size = pool_size
         self.state_handle = state_handle
         self._queue = deque()
-        self._queue_copy = deque()
         self._task_loop = deque()
         self._waiting_threads = []
+        self._stopped = False
 
     def _wait_condition(self, task):
         with task.condition:
             task.condition.wait()
-            task.start()
+            if self._stopped:
+                return None
+            task.initialize()
             logger.info(str(task))
             self._task_loop.append(task)
 
     def _posponede_task(self, task):
-        """Creates a thread whose task, waiting notify then to add task to the task loop"""
+        """Creates a thread wich waiting notify then add task to the task loop"""
         logger.info(f'{task.name} waiting dependencies' )
         t = threading.Thread(target=self._wait_condition, args=(task,))
         t.start()
 
     def schedule(self, task: Job) -> None:
-        self.state_handle.clear_statement()
-        if len(self._queue) < self.pool_size:
-            if task.dependencies:
-                for t in task.dependencies:
-                    self._queue.append(t)
-                    self._queue_copy.append(t)
-                    self._posponede_task(task)
+        if not self.state_handle.get_state(task.name):
+            if len(self._queue) < self.pool_size:
+                if task.dependencies:
+                    for t in task.dependencies:
+                        self._queue.append(t)
+                        self._waiting_threads.append(task)
+                        self._posponede_task(task)
+                else:
+                    self._queue.append(task)
             else:
-                self._queue.append(task)
-                self._queue_copy.append(task)
+                logger.error('Queue is full')
         else:
-            logger.error('Queue is full')
+            logger.info(f'Task {task.name} already done!')
 
     def _set_timer(self, task: Job) -> None:
         """Creates a thread that after a specified time adds a task to the task loop"""
         if task.start_at:
+            self.state_handle.set_state(key=task.name, value=False)
             interval = (task.start_at - datetime.now()).seconds
             logger.info(str(task))
             t = Timer(interval=interval, function=self._task_loop.append, args=(task,))
@@ -61,14 +65,14 @@ class Scheduler:
 
     def _initial_with_timer(self, task: Job) -> None:
         """Initialized task which has start at parametr"""
-        task.start()
+        task.initialize() # тут был неудачный нейминг(task.start()), на самом деле тут просто инициализируется корутина
         self._set_timer(task)
 
     def _initial_task(self, task: Job) -> Job | None:
         if task.start_at:
             self._initial_with_timer(task)
         else:
-            task.start()
+            task.initialize()
             logger.info(str(task))
             return task
 
@@ -91,11 +95,13 @@ class Scheduler:
             self._task_loop.append(task)
         else:
             logger.info(f'{task.name} will be stopped cause run out of attempts to restart')
+            self.state_handle.set_state(key=task.name, value=False)
 
     def _check_duration(self, task: Job) -> bool:
         if task.end_at and task.end_at < datetime.now():
             task.stop()
             logger.info(f'{task.name} stopped cause expired time')
+            self.state_handle.set_state(key=task.name, value=False)
             return False
         return True
 
@@ -106,7 +112,7 @@ class Scheduler:
         If an error occurs during execution, it tries to restart the coroutine.
         """
         try:
-            task.continue_()
+            task.run()
             self._task_loop.append(task)
         except StopIteration:
             self.state_handle.set_state(key=task.name, value=True)
@@ -116,11 +122,16 @@ class Scheduler:
             self._check_tries(task)
 
     def _cancel_threads(self):
-        """Stops Timer Thread"""
+        """Stops Threads"""
         if self._waiting_threads:
             for t in self._waiting_threads:
-                t.cancel()
-                logger.info(f'Thread {t} canceled')
+                try:
+                    t.cancel()
+                    logger.info(f'Thread {t} canceled')
+                except AttributeError:
+                    self.state_handle.set_state(key=t.name, value=False)
+                    with t.condition:
+                        t.condition.notify() # Отпускает ожидающие потоки, если self.stoped - поток не добавляет task в task_loop
 
     def run(self) -> None:
         """Starts processing of all tasks from the task loop"""
@@ -130,24 +141,22 @@ class Scheduler:
                 task = self._task_loop.popleft()
                 if self._check_duration(task):
                     self._run_task(task)
-            elif threading.active_count() > 1:
+            # Тут проверяется есть ли еще активные потоки кроме основного, это надо так как если у нас есть 
+            # отложеные task на определеное время(те у которых при создании указан start_at), то они будут
+            #  добавлены позже к task_loop, для этого через метод
+            # _set_timer устанавливается threading.Timer(), который запускает поток по таймеру,
+            # который в свою очередь добавляет отложеную по времени task в task_loop, если 
+            # не делать эту проверку то после того как все текущие task выполнятся, task_loop 
+            # опустеет и выполнение scheduler закончиться до того как отложеная taskа попадет в луп
+            elif threading.active_count() > 1: 
                 time.sleep(0.3)
                 continue
             else:
-                logger.info('Task loop is empty. Check tasks status in state.json')
+                logger.info(f'Task loop is empty. Check tasks status in {JSON_FILEPATH}')
                 break
 
-    def restart(self):
-        logger.info('Shceduler will be restarted')
-        self._cancel_threads()
-        self._queue.clear()
-        self._task_loop.clear()
-
-        for task in self._queue_copy:
-            if not self.state_handle.get_state(task.name):
-                self._queue.append(task)
-        self.run()
-
     def stop(self):
-        logger.info('Scheduler was stopped by user')
+        self._stopped = True
+        logger.info(f'Scheduler was stopped by user. Check tasks status in {JSON_FILEPATH}')
+        [self.state_handle.set_state(key=t.name, value=False) for t in self._task_loop]        
         self._cancel_threads()

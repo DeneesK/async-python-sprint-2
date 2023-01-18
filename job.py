@@ -23,23 +23,25 @@ class Job:
 
         self.start_at = datetime.strptime(start_at, DT_TEMPLATE) if start_at else ''
         self.max_working_time = timedelta(seconds=max_working_time) if max_working_time else 0
-
-        if self.start_at and self.max_working_time:
-            self.end_at = self.start_at + self.max_working_time
-        elif self.max_working_time:
-            self.end_at = datetime.now() + self.max_working_time
-        else:
-            self.end_at = None
-
         self.tries = tries
         self.condition = condition_obj
         self.dependencies = [Job(task=t, args=(condition_obj, *args)) for t in dependencies]
         self.task = task
         self.args = args
         self.name = task.__name__
+        
         self._gen = None
+        self.end_at = self._set_end_at()
 
-    def start(self) -> None:
+    def _set_end_at(self) -> datetime | None:
+        if self.start_at and self.max_working_time:
+            return self.start_at + self.max_working_time
+        elif self.max_working_time:
+            return datetime.now() + self.max_working_time
+        else:
+            return None
+
+    def initialize(self) -> None:
         self._gen = self.task(*self.args)
 
     def restart(self):
@@ -50,7 +52,7 @@ class Job:
     def stop(self) -> None:
         self._gen.close()
 
-    def continue_(self) -> None:
+    def run(self) -> None:
         self._gen.send(True)
 
     def __str__(self) -> str:
