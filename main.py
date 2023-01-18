@@ -21,6 +21,7 @@ def read_text():
     _ = (yield)
     with open('task_files/lorem.txt', 'r') as file:
         while text := file.readline():
+            time.sleep(1)
             _ = (yield)
             yield text
 
@@ -56,7 +57,7 @@ def get_weather_forecast():
 
 start_at = str((datetime.now() + timedelta(seconds=3)))
 scheduler = Scheduler()
-task1 = Job(task=read_text, tries=3, start_at=start_at, max_working_time=0)
+task1 = Job(task=read_text, tries=3, start_at=start_at, max_working_time=1)
 task2 = Job(task=delete_dirs, dependencies=[create_dirs], args=(100,))
 task3 = Job(task=get_weather_forecast)
 
